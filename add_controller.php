@@ -1,5 +1,7 @@
-```php
 <?php
+
+session_start();
+
 /*
 ============================================================
  ESP-SWITCH5 REMOTE
@@ -23,8 +25,6 @@ require_once __DIR__ . "/config.php";
 require_once __DIR__ . "/db.php";
 
 date_default_timezone_set("Asia/Kolkata");
-
-session_start();
 
 /* =========================================================
    ADMIN LOGIN CHECK
@@ -134,7 +134,6 @@ if (isset($_POST["save_controller"])) {
                     "Controller ID already exists.";
 
                 $message_type = "error";
-
             }
 
             $stmt->close();
@@ -193,14 +192,6 @@ if (isset($_POST["save_controller"])) {
 
         if ($message === "") {
 
-            /*
-             * active = 1
-             *
-             * last_seen   = NULL
-             * start_time  = NULL
-             * end_time    = NULL
-             */
-
             $stmt = $conn->prepare("
                 INSERT INTO controllers
                 (
@@ -253,9 +244,7 @@ if (isset($_POST["save_controller"])) {
 
                     $message_type = "success";
 
-                    /*
-                     * Clear form after successful insertion.
-                     */
+                    /* Clear form after successful insertion */
 
                     $controller_id  = "";
                     $customer_token = "";
@@ -278,6 +267,7 @@ if (isset($_POST["save_controller"])) {
 }
 
 ?>
+
 <!DOCTYPE html>
 
 <html lang="en">
@@ -287,7 +277,7 @@ if (isset($_POST["save_controller"])) {
 <meta charset="UTF-8">
 
 <meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
+   content="width=device-width, initial-scale=1.0">
 
 <title>Add Controller - ESP-SWITCH5</title>
 
@@ -478,7 +468,6 @@ Add New Controller
 ESP-SWITCH5 REMOTE
 </div>
 
-
 <?php
 
 if ($message !== "") {
@@ -509,9 +498,7 @@ echo htmlspecialchars(
 
 ?>
 
-
 <form method="post">
-
 
 <div class="form-group">
 
@@ -520,22 +507,22 @@ Controller ID
 </label>
 
 <input
-    type="text"
-    id="controller_id"
-    name="controller_id"
-    value="<?php
-        echo htmlspecialchars(
-            $controller_id,
-            ENT_QUOTES,
-            "UTF-8"
-        );
-    ?>"
-    placeholder="Example: ESP0002"
-    required
+type="text"
+id="controller_id"
+name="controller_id"
+value="<?php
+     echo htmlspecialchars(
+         $controller_id,
+         ENT_QUOTES,
+         "UTF-8"
+     );
+ ?>"
+placeholder="Example: ESP0002"
+required
+
 >
 
 </div>
-
 
 <div class="form-group">
 
@@ -544,21 +531,21 @@ Customer Token
 </label>
 
 <input
-    type="text"
-    id="customer_token"
-    name="customer_token"
-    value="<?php
-        echo htmlspecialchars(
-            $customer_token,
-            ENT_QUOTES,
-            "UTF-8"
-        );
-    ?>"
-    placeholder="Optional"
+type="text"
+id="customer_token"
+name="customer_token"
+value="<?php
+     echo htmlspecialchars(
+         $customer_token,
+         ENT_QUOTES,
+         "UTF-8"
+     );
+ ?>"
+placeholder="Optional"
+
 >
 
 </div>
-
 
 <div class="form-group">
 
@@ -567,22 +554,22 @@ Device Token
 </label>
 
 <input
-    type="text"
-    id="device_token"
-    name="device_token"
-    value="<?php
-        echo htmlspecialchars(
-            $device_token,
-            ENT_QUOTES,
-            "UTF-8"
-        );
-    ?>"
-    placeholder="Example: ESP0002-CUST-4N8W6Z2K9P5R7M1Q"
-    required
+type="text"
+id="device_token"
+name="device_token"
+value="<?php
+     echo htmlspecialchars(
+         $device_token,
+         ENT_QUOTES,
+         "UTF-8"
+     );
+ ?>"
+placeholder="Example: ESP0002-CUST-4N8W6Z2K9P5R7M1Q"
+required
+
 >
 
 </div>
-
 
 <div class="form-group">
 
@@ -591,31 +578,31 @@ Customer Name
 </label>
 
 <input
-    type="text"
-    id="customer_name"
-    name="customer_name"
-    value="<?php
-        echo htmlspecialchars(
-            $customer_name,
-            ENT_QUOTES,
-            "UTF-8"
-        );
-    ?>"
-    placeholder="Example: ABC Customer"
+type="text"
+id="customer_name"
+name="customer_name"
+value="<?php
+     echo htmlspecialchars(
+         $customer_name,
+         ENT_QUOTES,
+         "UTF-8"
+     );
+ ?>"
+placeholder="Example: ABC Customer"
+
 >
 
 </div>
 
-
 <button
-    type="submit"
-    name="save_controller"
+type="submit"
+name="save_controller"
+
 >
-ADD CONTROLLER
-</button>
+
+ADD CONTROLLER </button>
 
 </form>
-
 
 <div class="note">
 
@@ -633,17 +620,16 @@ End Time: <strong>NULL</strong>
 
 </div>
 
-
 <a
-    class="back"
-    href="index.php"
+class="back"
+href="index.php"
+
 >
-← Back to Control Panel
-</a>
+
+← Back to Control Panel </a>
 
 </div>
 
 </body>
 
 </html>
-```
