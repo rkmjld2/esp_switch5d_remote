@@ -1,0 +1,4 @@
+RewriteEngine On
+
+# Controller friendly URL
+RewriteRule ^c/([A-Za-z0-9_-]+)$ index.php?controller_id=$1 [L,QSA]
