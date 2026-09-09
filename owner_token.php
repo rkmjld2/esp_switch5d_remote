@@ -1,53 +1,39 @@
 <?php
 /*
 ============================================================
- ESP-SWITCH5 REMOTE
- OWNER-ONLY CONTROLLER MANAGEMENT
+ ESP-SWITCH5 REMOTE - index.php
 ============================================================
 
-Functions:
+TWO MODES
 
-    ADD
-    EDIT
-    DELETE
-    ACTIVATE / DEACTIVATE
+1. ADMINISTRATOR
+   index.php?controller_id=ESP0001
 
-Fields in controllers:
+2. CUSTOMER
+   /c/ESP0001?t=CUSTOMER_TOKEN
 
-    id
-    controller_id
-    customer_token
-    device_token
-    customer_name
-    active
-    last_seen
+TIME CONTROL
+
+Customer:
     start_time
     end_time
 
-Authentication:
+Owner:
+    owner_start_time
+    owner_end_time
 
-    TOKEN_PASSWORD environment variable
+OWNER HAS PRIORITY.
 
-Database:
-
-    esp_switch5
-    TiDB Cloud
-
-Timezone:
-
-    Asia/Kolkata
-
-IMPORTANT:
-
-    This page is OWNER ONLY.
+Effective END:
+    earlier of customer END and owner END.
 
 ============================================================
 */
 
+require_once __DIR__ . "/config.php";
+require_once __DIR__ . "/db.php";
 
-/* =========================================================
-   SESSION MUST START BEFORE ANY OUTPUT
-========================================================= */
+date_default_timezone_set("Asia/Kolkata");
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_start();
@@ -55,101 +41,207 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 
 
 /* =========================================================
-   CONFIGURATION
-========================================================= */
-
-require_once __DIR__ . "/config.php";
-
-
-/* =========================================================
-   DATABASE
-========================================================= */
-
-require_once __DIR__ . "/db.php";
-
-
-/* =========================================================
-   VARIABLES
+   BASIC VARIABLES
 ========================================================= */
 
 $login_error = "";
-
 $message = "";
-
 $message_type = "";
 
-$edit_controller = null;
+$customer_mode = false;
+
+$customer_token =
+    trim($_GET["t"] ?? "");
+
+$selected_controller =
+    trim($_GET["controller_id"] ?? "");
 
 
 /* =========================================================
-   OWNER LOGOUT
+   DETERMINE CUSTOMER MODE
 ========================================================= */
 
-if (isset($_GET["logout"])) {
+if (
+    $selected_controller !== "" &&
+    $customer_token !== ""
+) {
+    $customer_mode = true;
+}
+
+
+/* =========================================================
+   CUSTOMER TOKEN VALIDATION
+========================================================= */
+
+if ($customer_mode) {
+
+    $stmt = $conn->prepare("
+        SELECT
+            id,
+            controller_id,
+            device_token,
+            customer_name,
+            customer_token,
+            active,
+            last_seen,
+            start_time,
+            end_time,
+            owner_start_time,
+            owner_end_time
+        FROM controllers
+        WHERE controller_id = ?
+          AND customer_token = ?
+        LIMIT 1
+    ");
+
+    if (!$stmt) {
+        die("Customer authentication preparation failed.");
+    }
+
+    $stmt->bind_param(
+        "ss",
+        $selected_controller,
+        $customer_token
+    );
+
+    if (!$stmt->execute()) {
+
+        $stmt->close();
+
+        die("Customer authentication failed.");
+    }
+
+    $result =
+        $stmt->get_result();
+
+    if ($result->num_rows === 0) {
+
+        $stmt->close();
+
+        http_response_code(403);
+
+        die("
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset='UTF-8'>
+                <meta name='viewport'
+                      content='width=device-width, initial-scale=1.0'>
+                <title>Access Denied</title>
+
+                <style>
+                    body {
+                        margin: 0;
+                        padding: 30px;
+                        font-family: Arial, Helvetica, sans-serif;
+                        background: #f2f2f2;
+                    }
+
+                    .box {
+                        max-width: 500px;
+                        margin: 80px auto;
+                        padding: 30px;
+                        background: white;
+                        border-radius: 12px;
+                        box-shadow:
+                            0 3px 15px
+                            rgba(0,0,0,0.15);
+                        text-align: center;
+                    }
+
+                    h1 {
+                        color: #dc3545;
+                    }
+                </style>
+            </head>
+
+            <body>
+
+            <div class='box'>
+
+                <h1>ACCESS DENIED</h1>
+
+                <p>
+                    Invalid controller access token.
+                </p>
+
+            </div>
+
+            </body>
+            </html>
+        ");
+    }
+
+    $customer_controller =
+        $result->fetch_assoc();
+
+    $stmt->close();
+}
+
+
+/* =========================================================
+   LOGOUT
+========================================================= */
+
+if (
+    !$customer_mode &&
+    isset($_GET["logout"])
+) {
 
     $_SESSION = [];
 
-    if (ini_get("session.use_cookies")) {
-
-        $params = session_get_cookie_params();
-
-        setcookie(
-            session_name(),
-            "",
-            time() - 42000,
-            $params["path"],
-            $params["domain"],
-            $params["secure"],
-            $params["httponly"]
-        );
-    }
-
     session_destroy();
 
-    header("Location: owner_token.php");
+    header("Location: index.php");
 
     exit;
 }
 
 
 /* =========================================================
-   OWNER LOGIN
+   ADMIN LOGIN
 ========================================================= */
 
-if (isset($_POST["owner_login"])) {
+if (
+    !$customer_mode &&
+    isset($_POST["login"])
+) {
 
     $password =
-        $_POST["owner_password"] ?? "";
+        $_POST["password"] ?? "";
 
     if (
-        $token_password !== "" &&
+        $admin_password !== "" &&
         hash_equals(
-            $token_password,
+            $admin_password,
             $password
         )
     ) {
 
-        $_SESSION["esp_owner"] = true;
+        $_SESSION["esp_admin"] = true;
 
-        header("Location: owner_token.php");
+        header("Location: index.php");
 
         exit;
 
     } else {
 
         $login_error =
-            "Invalid owner password.";
+            "Invalid password.";
     }
 }
 
 
 /* =========================================================
-   OWNER LOGIN CHECK
+   ADMIN LOGIN PAGE
 ========================================================= */
 
 if (
-    !isset($_SESSION["esp_owner"]) ||
-    $_SESSION["esp_owner"] !== true
+    !$customer_mode &&
+    (
+        !isset($_SESSION["esp_admin"]) ||
+        $_SESSION["esp_admin"] !== true
+    )
 ) {
 
 ?>
@@ -163,10 +255,10 @@ if (
 <meta charset="UTF-8">
 
 <meta name="viewport"
-   content="width=device-width, initial-scale=1.0">
+      content="width=device-width, initial-scale=1.0">
 
 <title>
-ESP-SWITCH5 - Owner Login
+ESP-SWITCH5 REMOTE - Login
 </title>
 
 <style>
@@ -191,7 +283,7 @@ body {
 
 .login-box {
 
-    max-width: 450px;
+    max-width: 420px;
 
     margin: 80px auto;
 
@@ -209,30 +301,11 @@ body {
 }
 
 h1 {
-
     margin-top: 0;
-
     color: #333;
 }
 
-.warning {
-
-    background: #fff3cd;
-
-    color: #856404;
-
-    border: 1px solid #ffeeba;
-
-    padding: 12px;
-
-    border-radius: 6px;
-
-    margin-bottom: 20px;
-
-    font-size: 14px;
-}
-
-input {
+input[type="password"] {
 
     width: 100%;
 
@@ -257,18 +330,13 @@ button {
 
     border-radius: 6px;
 
-    background: #343a40;
+    background: #007bff;
 
     color: white;
 
     font-size: 16px;
 
     cursor: pointer;
-}
-
-button:hover {
-
-    opacity: 0.85;
 }
 
 .error {
@@ -298,20 +366,12 @@ button:hover {
 <div class="login-box">
 
 <h1>
-ESP-SWITCH5
+ESP-SWITCH5 REMOTE
 </h1>
 
-<h2>
-OWNER ACCESS
-</h2>
-
-<div class="warning">
-
-This page is for owner use only.<br>
-
-Do not give this page or its password to customers.
-
-</div>
+<p>
+Administrator Login
+</p>
 
 <?php
 
@@ -332,28 +392,24 @@ if ($login_error !== "") {
 <form method="post">
 
 <input
-type="password"
-name="owner_password"
-placeholder="Enter owner password"
-required
-autofocus
-
+    type="password"
+    name="password"
+    placeholder="Enter administrator password"
+    required
+    autofocus
 >
 
 <button
-type="submit"
-name="owner_login"
-
+    type="submit"
+    name="login"
 >
-
-OWNER LOGIN </button>
+LOGIN
+</button>
 
 </form>
 
 <div class="small">
-
-ESP-SWITCH5 Controller Management
-
+Remote ESP8266 Control System
 </div>
 
 </div>
@@ -370,494 +426,1247 @@ exit;
 
 
 /* =========================================================
-   DELETE CONTROLLER
+   ADMIN CONTROLLER SELECTION
 ========================================================= */
 
-if (isset($_POST["delete_controller"])) {
+if (!$customer_mode) {
 
-    $controller_id =
+    $selected_controller =
         trim(
-            $_POST["controller_id"] ?? ""
+            $_GET["controller_id"] ?? ""
+        );
+}
+
+
+/* =========================================================
+   SAVE CUSTOMER START TIME
+========================================================= */
+
+if (isset($_POST["save_start"])) {
+
+    if ($customer_mode) {
+
+        $controller_id =
+            $customer_controller["controller_id"];
+
+    } else {
+
+        $controller_id =
+            trim(
+                $_POST["controller_id"] ?? ""
+            );
+    }
+
+    $start_time =
+        trim(
+            $_POST["start_time"] ?? ""
         );
 
 
     if ($controller_id === "") {
 
         $message =
-            "Controller ID is required.";
+            "Controller ID missing.";
+
+        $message_type =
+            "error";
+
+    } elseif ($start_time === "") {
+
+        $message =
+            "Start date and time missing.";
 
         $message_type =
             "error";
 
     } else {
 
-        $stmt =
-            $conn->prepare("
-                DELETE FROM controllers
-                WHERE controller_id = ?
-                LIMIT 1
-            ");
-
-
-        if (!$stmt) {
-
-            $message =
-                "Delete preparation failed.";
-
-            $message_type =
-                "error";
-
-        } else {
-
-            $stmt->bind_param(
-                "s",
-                $controller_id
+        $start_datetime =
+            str_replace(
+                "T",
+                " ",
+                $start_time
             );
 
-
-            try {
-
-                if ($stmt->execute()) {
-
-                    if (
-                        $stmt->affected_rows > 0
-                    ) {
-
-                        $message =
-                            "Controller " .
-                            $controller_id .
-                            " deleted successfully.";
-
-                        $message_type =
-                            "success";
-
-                    } else {
-
-                        $message =
-                            "Controller not found.";
-
-                        $message_type =
-                            "error";
-                    }
-
-                } else {
-
-                    $message =
-                        "Controller deletion failed.";
-
-                    $message_type =
-                        "error";
-                }
-
-            }
-            catch (mysqli_sql_exception $e) {
-
-                $message =
-                    "Controller could not be deleted. " .
-                    "It may be referenced by another table.";
-
-                $message_type =
-                    "error";
-            }
-
-
-            $stmt->close();
+        if (
+            strlen($start_datetime) === 16
+        ) {
+            $start_datetime .= ":00";
         }
-    }
-}
 
 
-/* =========================================================
-   ACTIVATE CONTROLLER
-========================================================= */
+        /*
+         * Read OWNER START LIMIT.
+         */
 
-if (isset($_POST["activate_controller"])) {
-
-    $controller_id =
-        trim(
-            $_POST["controller_id"] ?? ""
-        );
-
-
-    if ($controller_id === "") {
-
-        $message =
-            "Controller ID is required.";
-
-        $message_type =
-            "error";
-
-    } else {
-
-        $stmt =
-            $conn->prepare("
-                UPDATE controllers
-                SET active = 1
-                WHERE controller_id = ?
-            ");
-
-
-        if (!$stmt) {
-
-            $message =
-                "Activation preparation failed.";
-
-            $message_type =
-                "error";
-
-        } else {
-
-            $stmt->bind_param(
-                "s",
-                $controller_id
-            );
-
-
-            if ($stmt->execute()) {
-
-                $message =
-                    "Controller " .
-                    $controller_id .
-                    " activated successfully.";
-
-                $message_type =
-                    "success";
-
-            } else {
-
-                $message =
-                    "Controller activation failed.";
-
-                $message_type =
-                    "error";
-            }
-
-
-            $stmt->close();
-        }
-    }
-}
-
-
-/* =========================================================
-   DEACTIVATE CONTROLLER
-========================================================= */
-
-if (isset($_POST["deactivate_controller"])) {
-
-    $controller_id =
-        trim(
-            $_POST["controller_id"] ?? ""
-        );
-
-
-    if ($controller_id === "") {
-
-        $message =
-            "Controller ID is required.";
-
-        $message_type =
-            "error";
-
-    } else {
-
-        $stmt =
-            $conn->prepare("
-                UPDATE controllers
-                SET active = 0
-                WHERE controller_id = ?
-            ");
-
-
-        if (!$stmt) {
-
-            $message =
-                "Deactivation preparation failed.";
-
-            $message_type =
-                "error";
-
-        } else {
-
-            $stmt->bind_param(
-                "s",
-                $controller_id
-            );
-
-
-            if ($stmt->execute()) {
-
-                $message =
-                    "Controller " .
-                    $controller_id .
-                    " deactivated successfully.";
-
-                $message_type =
-                    "success";
-
-            } else {
-
-                $message =
-                    "Controller deactivation failed.";
-
-                $message_type =
-                    "error";
-            }
-
-
-            $stmt->close();
-        }
-    }
-}
-
-
-/* =========================================================
-   ADD CONTROLLER
-========================================================= */
-
-if (isset($_POST["add_controller"])) {
-
-    $controller_id =
-        trim(
-            $_POST["controller_id"] ?? ""
-        );
-
-    $customer_token =
-        trim(
-            $_POST["customer_token"] ?? ""
-        );
-
-    $device_token =
-        trim(
-            $_POST["device_token"] ?? ""
-        );
-
-    $customer_name =
-        trim(
-            $_POST["customer_name"] ?? ""
-        );
-
-    $active =
-        isset($_POST["active"])
-            ? (int)$_POST["active"]
-            : 1;
-
-
-    /* -----------------------------------------------------
-       VALIDATE CONTROLLER ID
-    ----------------------------------------------------- */
-
-    if ($controller_id === "") {
-
-        $message =
-            "Controller ID is required.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE CONTROLLER ID FORMAT
-    ----------------------------------------------------- */
-
-    elseif (
-        !preg_match(
-            '/^[A-Za-z0-9_-]{1,50}$/',
-            $controller_id
-        )
-    ) {
-
-        $message =
-            "Invalid Controller ID.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE CUSTOMER TOKEN
-    ----------------------------------------------------- */
-
-    elseif (
-        $customer_token !== "" &&
-        !preg_match(
-            '/^[A-Za-z0-9_-]{1,100}$/',
-            $customer_token
-        )
-    ) {
-
-        $message =
-            "Invalid Customer Token.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE DEVICE TOKEN
-    ----------------------------------------------------- */
-
-    elseif ($device_token === "") {
-
-        $message =
-            "Device Token is required.";
-
-        $message_type =
-            "error";
-    }
-
-    elseif (
-        !preg_match(
-            '/^[A-Za-z0-9_-]{8,100}$/',
-            $device_token
-        )
-    ) {
-
-        $message =
-            "Invalid Device Token. " .
-            "Use 8-100 characters containing " .
-            "letters, numbers, hyphen or underscore.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE CUSTOMER NAME
-    ----------------------------------------------------- */
-
-    elseif (
-        strlen($customer_name) > 100
-    ) {
-
-        $message =
-            "Customer name is too long.";
-
-        $message_type =
-            "error";
-    }
-
-
-    else {
-
-        $stmt =
-            $conn->prepare("
-                INSERT INTO controllers
-                (
-                    controller_id,
-                    customer_token,
-                    device_token,
-                    customer_name,
-                    active
-                )
-                VALUES
-                (?, ?, ?, ?, ?)
-            ");
-
-
-        if (!$stmt) {
-
-            $message =
-                "Controller insertion preparation failed.";
-
-            $message_type =
-                "error";
-
-        } else {
-
-            $stmt->bind_param(
-                "ssssi",
-                $controller_id,
-                $customer_token,
-                $device_token,
-                $customer_name,
-                $active
-            );
-
-
-            try {
-
-                if ($stmt->execute()) {
-
-                    $message =
-                        "Controller " .
-                        $controller_id .
-                        " added successfully.";
-
-                    $message_type =
-                        "success";
-
-                }
-
-            }
-            catch (mysqli_sql_exception $e) {
-
-                if (
-                    $e->getCode() == 1062
-                ) {
-
-                    $message =
-                        "Controller ID or Device Token already exists.";
-
-                } else {
-
-                    $message =
-                        "Could not add controller.";
-                }
-
-                $message_type =
-                    "error";
-            }
-
-
-            $stmt->close();
-        }
-    }
-}
-
-
-/* =========================================================
-   EDIT - LOAD CONTROLLER
-========================================================= */
-
-if (
-    isset($_GET["edit"]) &&
-    trim($_GET["edit"]) !== ""
-) {
-
-    $edit_id =
-        trim(
-            $_GET["edit"]
-        );
-
-
-    $stmt =
-        $conn->prepare("
+        $stmt = $conn->prepare("
             SELECT
-                id,
-                controller_id,
-                customer_token,
-                device_token,
-                customer_name,
-                active,
-                last_seen,
-                start_time,
-                end_time
+                owner_start_time
             FROM controllers
             WHERE controller_id = ?
             LIMIT 1
         ");
 
 
+        if ($stmt) {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+            $stmt->execute();
+
+            $result =
+                $stmt->get_result();
+
+            $owner_row =
+                $result->num_rows > 0
+                    ? $result->fetch_assoc()
+                    : null;
+
+            $stmt->close();
+
+        } else {
+
+            $owner_row = null;
+        }
+
+
+        /*
+         * OWNER START IS A MINIMUM START LIMIT.
+         */
+
+        if (
+            $owner_row !== null &&
+            !empty(
+                $owner_row["owner_start_time"]
+            )
+        ) {
+
+            try {
+
+                $requested_start =
+                    new DateTime(
+                        $start_datetime,
+                        new DateTimeZone(
+                            "Asia/Kolkata"
+                        )
+                    );
+
+                $owner_start =
+                    new DateTime(
+                        $owner_row["owner_start_time"],
+                        new DateTimeZone(
+                            "Asia/Kolkata"
+                        )
+                    );
+
+
+                if (
+                    $requested_start < $owner_start
+                ) {
+
+                    $message =
+                        "Customer START TIME cannot be earlier than the OWNER START TIME.";
+
+                    $message_type =
+                        "error";
+
+                    $requested_start = null;
+                }
+
+            }
+            catch (Exception $e) {
+
+                $message =
+                    "Invalid start date/time.";
+
+                $message_type =
+                    "error";
+
+                $requested_start = null;
+            }
+
+        } else {
+
+            $requested_start = true;
+        }
+
+
+        if (
+            $requested_start !== null &&
+            $requested_start !== false
+        ) {
+
+            $stmt = $conn->prepare("
+                UPDATE controllers
+                SET start_time = ?
+                WHERE controller_id = ?
+            ");
+
+
+            if ($stmt) {
+
+                $stmt->bind_param(
+                    "ss",
+                    $start_datetime,
+                    $controller_id
+                );
+
+                if ($stmt->execute()) {
+
+                    $message =
+                        "Customer start time saved successfully.";
+
+                    $message_type =
+                        "success";
+
+                } else {
+
+                    $message =
+                        "Could not save start time.";
+
+                    $message_type =
+                        "error";
+                }
+
+                $stmt->close();
+
+            } else {
+
+                $message =
+                    "Start time preparation failed.";
+
+                $message_type =
+                    "error";
+            }
+        }
+    }
+
+    $selected_controller =
+        $controller_id;
+}
+
+
+/* =========================================================
+   SAVE CUSTOMER END TIME
+========================================================= */
+
+if (isset($_POST["save_end"])) {
+
+    if ($customer_mode) {
+
+        $controller_id =
+            $customer_controller["controller_id"];
+
+    } else {
+
+        $controller_id =
+            trim(
+                $_POST["controller_id"] ?? ""
+            );
+    }
+
+    $end_time =
+        trim(
+            $_POST["end_time"] ?? ""
+        );
+
+
+    if ($controller_id === "") {
+
+        $message =
+            "Controller ID missing.";
+
+        $message_type =
+            "error";
+
+    } elseif ($end_time === "") {
+
+        $message =
+            "End date and time missing.";
+
+        $message_type =
+            "error";
+
+    } else {
+
+        $end_datetime =
+            str_replace(
+                "T",
+                " ",
+                $end_time
+            );
+
+        if (
+            strlen($end_datetime) === 16
+        ) {
+            $end_datetime .= ":00";
+        }
+
+
+        /*
+         * GET CUSTOMER START AND OWNER END.
+         */
+
+        $stmt = $conn->prepare("
+            SELECT
+                start_time,
+                owner_end_time
+            FROM controllers
+            WHERE controller_id = ?
+            LIMIT 1
+        ");
+
+
+        if ($stmt) {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+            $stmt->execute();
+
+            $result =
+                $stmt->get_result();
+
+            $schedule_row =
+                $result->num_rows > 0
+                    ? $result->fetch_assoc()
+                    : null;
+
+            $stmt->close();
+
+        } else {
+
+            $schedule_row = null;
+        }
+
+
+        $allow_save = true;
+
+
+        /*
+         * CUSTOMER END MUST NOT BE BEFORE
+         * CUSTOMER START.
+         */
+
+        if (
+            $schedule_row !== null &&
+            !empty(
+                $schedule_row["start_time"]
+            )
+        ) {
+
+            try {
+
+                $requested_end =
+                    new DateTime(
+                        $end_datetime,
+                        new DateTimeZone(
+                            "Asia/Kolkata"
+                        )
+                    );
+
+                $customer_start =
+                    new DateTime(
+                        $schedule_row["start_time"],
+                        new DateTimeZone(
+                            "Asia/Kolkata"
+                        )
+                    );
+
+
+                if (
+                    $requested_end <=
+                    $customer_start
+                ) {
+
+                    $message =
+                        "END TIME must be later than CUSTOMER START TIME.";
+
+                    $message_type =
+                        "error";
+
+                    $allow_save = false;
+                }
+
+
+            }
+            catch (Exception $e) {
+
+                $message =
+                    "Invalid end date/time.";
+
+                $message_type =
+                    "error";
+
+                $allow_save = false;
+            }
+        }
+
+
+        /*
+         * OWNER END IS THE MAXIMUM.
+         */
+
+        if (
+            $allow_save &&
+            $schedule_row !== null &&
+            !empty(
+                $schedule_row["owner_end_time"]
+            )
+        ) {
+
+            try {
+
+                $requested_end =
+                    new DateTime(
+                        $end_datetime,
+                        new DateTimeZone(
+                            "Asia/Kolkata"
+                        )
+                    );
+
+                $owner_end =
+                    new DateTime(
+                        $schedule_row["owner_end_time"],
+                        new DateTimeZone(
+                            "Asia/Kolkata"
+                        )
+                    );
+
+
+                if (
+                    $requested_end >
+                    $owner_end
+                ) {
+
+                    $message =
+                        "Customer END TIME cannot be later than the OWNER END TIME: " .
+                        $owner_end->format(
+                            "Y-m-d H:i:s"
+                        );
+
+                    $message_type =
+                        "error";
+
+                    $allow_save = false;
+                }
+
+            }
+            catch (Exception $e) {
+
+                $message =
+                    "Invalid owner end date/time.";
+
+                $message_type =
+                    "error";
+
+                $allow_save = false;
+            }
+        }
+
+
+        if ($allow_save) {
+
+            $stmt = $conn->prepare("
+                UPDATE controllers
+                SET end_time = ?
+                WHERE controller_id = ?
+            ");
+
+
+            if ($stmt) {
+
+                $stmt->bind_param(
+                    "ss",
+                    $end_datetime,
+                    $controller_id
+                );
+
+                if ($stmt->execute()) {
+
+                    $message =
+                        "Customer end time saved successfully.";
+
+                    $message_type =
+                        "success";
+
+                } else {
+
+                    $message =
+                        "Could not save end time.";
+
+                    $message_type =
+                        "error";
+                }
+
+                $stmt->close();
+
+            } else {
+
+                $message =
+                    "End time preparation failed.";
+
+                $message_type =
+                    "error";
+            }
+        }
+    }
+
+    $selected_controller =
+        $controller_id;
+}
+
+
+/* =========================================================
+   SET PIN
+========================================================= */
+
+if (isset($_POST["set_pin"])) {
+
+    if ($customer_mode) {
+
+        $controller_id =
+            $customer_controller["controller_id"];
+
+    } else {
+
+        $controller_id =
+            trim(
+                $_POST["controller_id"] ?? ""
+            );
+    }
+
+
+    $pin =
+        strtoupper(
+            trim(
+                $_POST["pin"] ?? ""
+            )
+        );
+
+    $value =
+        isset($_POST["value"])
+            ? (int)$_POST["value"]
+            : -1;
+
+
+    if ($controller_id === "") {
+
+        $message =
+            "Controller ID missing.";
+
+        $message_type =
+            "error";
+
+    } elseif (
+        !preg_match(
+            '/^D[1-8]$/',
+            $pin
+        )
+    ) {
+
+        $message =
+            "Invalid pin.";
+
+        $message_type =
+            "error";
+
+    } elseif (
+        $value !== 0 &&
+        $value !== 1
+    ) {
+
+        $message =
+            "Invalid value.";
+
+        $message_type =
+            "error";
+
+    } else {
+
+        $stmt = $conn->prepare("
+            SELECT
+                active,
+                start_time,
+                end_time,
+                owner_start_time,
+                owner_end_time
+            FROM controllers
+            WHERE controller_id = ?
+            LIMIT 1
+        ");
+
+
+        if (!$stmt) {
+
+            $message =
+                "Controller query failed.";
+
+            $message_type =
+                "error";
+
+        } else {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+            $stmt->execute();
+
+            $result =
+                $stmt->get_result();
+
+
+            if ($result->num_rows === 0) {
+
+                $message =
+                    "Controller not found.";
+
+                $message_type =
+                    "error";
+
+            } else {
+
+                $controller =
+                    $result->fetch_assoc();
+
+
+                if (
+                    (int)$controller["active"] !== 1
+                ) {
+
+                    $message =
+                        "Controller is inactive.";
+
+                    $message_type =
+                        "error";
+
+                } else {
+
+                    $calendar_allowed = true;
+
+                    $calendar_status =
+                        "NO_SCHEDULE";
+
+
+                    $now =
+                        new DateTime(
+                            "now",
+                            new DateTimeZone(
+                                "Asia/Kolkata"
+                            )
+                        );
+
+
+                    /*
+                     * EFFECTIVE START
+                     */
+
+                    $effective_start = null;
+
+
+                    if (
+                        !empty(
+                            $controller["start_time"]
+                        )
+                    ) {
+
+                        $effective_start =
+                            new DateTime(
+                                $controller["start_time"],
+                                new DateTimeZone(
+                                    "Asia/Kolkata"
+                                )
+                            );
+                    }
+
+
+                    if (
+                        !empty(
+                            $controller["owner_start_time"]
+                        )
+                    ) {
+
+                        $owner_start =
+                            new DateTime(
+                                $controller["owner_start_time"],
+                                new DateTimeZone(
+                                    "Asia/Kolkata"
+                                )
+                            );
+
+
+                        if (
+                            $effective_start === null ||
+                            $owner_start >
+                            $effective_start
+                        ) {
+
+                            $effective_start =
+                                $owner_start;
+                        }
+                    }
+
+
+                    /*
+                     * EFFECTIVE END
+                     */
+
+                    $effective_end = null;
+
+
+                    if (
+                        !empty(
+                            $controller["end_time"]
+                        )
+                    ) {
+
+                        $effective_end =
+                            new DateTime(
+                                $controller["end_time"],
+                                new DateTimeZone(
+                                    "Asia/Kolkata"
+                                )
+                            );
+                    }
+
+
+                    if (
+                        !empty(
+                            $controller["owner_end_time"]
+                        )
+                    ) {
+
+                        $owner_end =
+                            new DateTime(
+                                $controller["owner_end_time"],
+                                new DateTimeZone(
+                                    "Asia/Kolkata"
+                                )
+                            );
+
+
+                        if (
+                            $effective_end === null ||
+                            $owner_end <
+                            $effective_end
+                        ) {
+
+                            $effective_end =
+                                $owner_end;
+                        }
+                    }
+
+
+                    /*
+                     * CHECK END FIRST
+                     */
+
+                    if (
+                        $effective_end !== null &&
+                        $now >= $effective_end
+                    ) {
+
+                        $calendar_allowed =
+                            false;
+
+                        $calendar_status =
+                            "EXPIRED";
+
+
+                        /*
+                         * RESET D1-D8.
+                         */
+
+                        $reset =
+                            $conn->prepare("
+                                UPDATE esp_control
+                                SET
+                                    D1 = 0,
+                                    D2 = 0,
+                                    D3 = 0,
+                                    D4 = 0,
+                                    D5 = 0,
+                                    D6 = 0,
+                                    D7 = 0,
+                                    D8 = 0
+                                WHERE controller_id = ?
+                            ");
+
+
+                        if ($reset) {
+
+                            $reset->bind_param(
+                                "s",
+                                $controller_id
+                            );
+
+                            $reset->execute();
+
+                            $reset->close();
+                        }
+
+
+                    } elseif (
+                        $effective_start !== null &&
+                        $now < $effective_start
+                    ) {
+
+                        $calendar_allowed =
+                            false;
+
+                        $calendar_status =
+                            "NOT_STARTED";
+
+                    } else {
+
+                        $calendar_allowed =
+                            true;
+
+                        $calendar_status =
+                            "ACTIVE";
+                    }
+
+
+                    if (!$calendar_allowed) {
+
+                        $message =
+                            "Controller is outside its permitted calendar time.";
+
+                        $message_type =
+                            "error";
+
+                    } else {
+
+                        $sql = "
+                            UPDATE esp_control
+                            SET `$pin` = ?
+                            WHERE controller_id = ?
+                        ";
+
+
+                        $update =
+                            $conn->prepare($sql);
+
+
+                        if (!$update) {
+
+                            $message =
+                                "Pin update preparation failed.";
+
+                            $message_type =
+                                "error";
+
+                        } else {
+
+                            $update->bind_param(
+                                "is",
+                                $value,
+                                $controller_id
+                            );
+
+
+                            if (
+                                $update->execute()
+                            ) {
+
+                                $message =
+                                    $pin .
+                                    " changed to " .
+                                    (
+                                        $value
+                                            ? "ON"
+                                            : "OFF"
+                                    );
+
+                                $message_type =
+                                    "success";
+
+                            } else {
+
+                                $message =
+                                    "Pin update failed.";
+
+                                $message_type =
+                                    "error";
+                            }
+
+
+                            $update->close();
+                        }
+                    }
+                }
+            }
+
+            $stmt->close();
+        }
+    }
+
+    $selected_controller =
+        $controller_id;
+}
+
+
+/* =========================================================
+   READ CONTROLLERS FOR ADMIN
+========================================================= */
+
+$controllers = [];
+
+
+if (!$customer_mode) {
+
+    $result =
+        $conn->query("
+            SELECT
+                controller_id,
+                customer_name,
+                active
+            FROM controllers
+            WHERE active = 1
+            ORDER BY controller_id
+        ");
+
+
+    if ($result) {
+
+        while (
+            $row =
+            $result->fetch_assoc()
+        ) {
+
+            $controllers[] =
+                $row;
+        }
+    }
+}
+
+
+/* =========================================================
+   CONTROLLER INFORMATION
+========================================================= */
+
+$selected_customer = "";
+$selected_active = 0;
+$selected_last_seen = "";
+
+$selected_start_time = "";
+$selected_end_time = "";
+
+$selected_owner_start_time = "";
+$selected_owner_end_time = "";
+
+
+if ($selected_controller !== "") {
+
+    if ($customer_mode) {
+
+        $row =
+            $customer_controller;
+
+    } else {
+
+        $stmt = $conn->prepare("
+            SELECT
+                controller_id,
+                customer_name,
+                active,
+                last_seen,
+                start_time,
+                end_time,
+                owner_start_time,
+                owner_end_time
+            FROM controllers
+            WHERE controller_id = ?
+            LIMIT 1
+        ");
+
+
+        if ($stmt) {
+
+            $stmt->bind_param(
+                "s",
+                $selected_controller
+            );
+
+            $stmt->execute();
+
+            $result =
+                $stmt->get_result();
+
+            if (
+                $result->num_rows > 0
+            ) {
+
+                $row =
+                    $result->fetch_assoc();
+
+            } else {
+
+                $row = null;
+            }
+
+            $stmt->close();
+
+        } else {
+
+            $row = null;
+        }
+    }
+
+
+    if (!empty($row)) {
+
+        $selected_customer =
+            $row["customer_name"] ?? "";
+
+        $selected_active =
+            (int)(
+                $row["active"] ?? 0
+            );
+
+
+        $selected_last_seen =
+            !empty($row["last_seen"])
+                ? $row["last_seen"]
+                : "Not yet seen";
+
+
+        $selected_start_time =
+            $row["start_time"] ?? "";
+
+        $selected_end_time =
+            $row["end_time"] ?? "";
+
+        $selected_owner_start_time =
+            $row["owner_start_time"] ?? "";
+
+        $selected_owner_end_time =
+            $row["owner_end_time"] ?? "";
+    }
+}
+
+
+/* =========================================================
+   EFFECTIVE END TIME FOR DISPLAY
+========================================================= */
+
+$effective_end_display = "";
+
+$effective_start_display = "";
+
+
+try {
+
+    $effective_start_dt = null;
+
+    if (
+        !empty($selected_start_time)
+    ) {
+
+        $effective_start_dt =
+            new DateTime(
+                $selected_start_time,
+                new DateTimeZone(
+                    "Asia/Kolkata"
+                )
+            );
+    }
+
+
+    if (
+        !empty($selected_owner_start_time)
+    ) {
+
+        $owner_start_dt =
+            new DateTime(
+                $selected_owner_start_time,
+                new DateTimeZone(
+                    "Asia/Kolkata"
+                )
+            );
+
+
+        if (
+            $effective_start_dt === null ||
+            $owner_start_dt >
+            $effective_start_dt
+        ) {
+
+            $effective_start_dt =
+                $owner_start_dt;
+        }
+    }
+
+
+    if (
+        $effective_start_dt !== null
+    ) {
+
+        $effective_start_display =
+            $effective_start_dt->format(
+                "Y-m-d H:i:s"
+            );
+    }
+
+
+    $effective_end_dt = null;
+
+    if (
+        !empty($selected_end_time)
+    ) {
+
+        $effective_end_dt =
+            new DateTime(
+                $selected_end_time,
+                new DateTimeZone(
+                    "Asia/Kolkata"
+                )
+            );
+    }
+
+
+    if (
+        !empty($selected_owner_end_time)
+    ) {
+
+        $owner_end_dt =
+            new DateTime(
+                $selected_owner_end_time,
+                new DateTimeZone(
+                    "Asia/Kolkata"
+                )
+            );
+
+
+        if (
+            $effective_end_dt === null ||
+            $owner_end_dt <
+            $effective_end_dt
+        ) {
+
+            $effective_end_dt =
+                $owner_end_dt;
+        }
+    }
+
+
+    if (
+        $effective_end_dt !== null
+    ) {
+
+        $effective_end_display =
+            $effective_end_dt->format(
+                "Y-m-d H:i:s"
+            );
+    }
+
+}
+catch (Exception $e) {
+
+    $effective_start_display = "";
+    $effective_end_display = "";
+}
+
+
+/* =========================================================
+   FORMAT HTML DATETIME
+========================================================= */
+
+$start_input_value = "";
+$end_input_value = "";
+
+
+if (
+    $selected_start_time !== ""
+) {
+
+    $timestamp =
+        strtotime(
+            $selected_start_time
+        );
+
+    if (
+        $timestamp !== false
+    ) {
+
+        $start_input_value =
+            date(
+                "Y-m-d\TH:i",
+                $timestamp
+            );
+    }
+}
+
+
+if (
+    $selected_end_time !== ""
+) {
+
+    $timestamp =
+        strtotime(
+            $selected_end_time
+        );
+
+    if (
+        $timestamp !== false
+    ) {
+
+        $end_input_value =
+            date(
+                "Y-m-d\TH:i",
+                $timestamp
+            );
+    }
+}
+
+
+/* =========================================================
+   READ D1-D8
+========================================================= */
+
+$pin_values = [
+
+    "D1" => 0,
+    "D2" => 0,
+    "D3" => 0,
+    "D4" => 0,
+    "D5" => 0,
+    "D6" => 0,
+    "D7" => 0,
+    "D8" => 0
+];
+
+
+if ($selected_controller !== "") {
+
+    $stmt = $conn->prepare("
+        SELECT
+            D1,
+            D2,
+            D3,
+            D4,
+            D5,
+            D6,
+            D7,
+            D8
+        FROM esp_control
+        WHERE controller_id = ?
+        LIMIT 1
+    ");
+
+
     if ($stmt) {
 
         $stmt->bind_param(
             "s",
-            $edit_id
+            $selected_controller
         );
 
         $stmt->execute();
@@ -870,18 +1679,25 @@ if (
             $result->num_rows > 0
         ) {
 
-            $edit_controller =
+            $row =
                 $result->fetch_assoc();
 
-        } else {
 
-            $message =
-                "Controller not found.";
+            for (
+                $i = 1;
+                $i <= 8;
+                $i++
+            ) {
 
-            $message_type =
-                "error";
+                $pin =
+                    "D" . $i;
+
+                $pin_values[$pin] =
+                    (int)(
+                        $row[$pin] ?? 0
+                    );
+            }
         }
-
 
         $stmt->close();
     }
@@ -889,284 +1705,27 @@ if (
 
 
 /* =========================================================
-   EDIT / UPDATE CONTROLLER
+   CUSTOMER URL
 ========================================================= */
 
-if (isset($_POST["update_controller"])) {
-
-    $original_controller_id =
-        trim(
-            $_POST["original_controller_id"] ?? ""
-        );
-
-    $controller_id =
-        trim(
-            $_POST["controller_id"] ?? ""
-        );
-
-    $customer_token =
-        trim(
-            $_POST["customer_token"] ?? ""
-        );
-
-    $device_token =
-        trim(
-            $_POST["device_token"] ?? ""
-        );
-
-    $customer_name =
-        trim(
-            $_POST["customer_name"] ?? ""
-        );
-
-    $active =
-        isset($_POST["active"])
-            ? (int)$_POST["active"]
-            : 1;
+$customer_url = "";
 
 
-    /* -----------------------------------------------------
-       VALIDATE ORIGINAL ID
-    ----------------------------------------------------- */
+if ($customer_mode) {
 
-    if ($original_controller_id === "") {
-
-        $message =
-            "Original Controller ID is missing.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE NEW ID
-    ----------------------------------------------------- */
-
-    elseif ($controller_id === "") {
-
-        $message =
-            "Controller ID is required.";
-
-        $message_type =
-            "error";
-    }
-
-    elseif (
-        !preg_match(
-            '/^[A-Za-z0-9_-]{1,50}$/',
-            $controller_id
-        )
-    ) {
-
-        $message =
-            "Invalid Controller ID.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE CUSTOMER TOKEN
-    ----------------------------------------------------- */
-
-    elseif (
-        $customer_token !== "" &&
-        !preg_match(
-            '/^[A-Za-z0-9_-]{1,100}$/',
+    $customer_url =
+        ($BASE_URL ?? (
+            "http://" .
+            ($_SERVER["HTTP_HOST"] ?? "localhost")
+        )) .
+        "/c/" .
+        rawurlencode(
+            $selected_controller
+        ) .
+        "?t=" .
+        rawurlencode(
             $customer_token
-        )
-    ) {
-
-        $message =
-            "Invalid Customer Token.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE DEVICE TOKEN
-    ----------------------------------------------------- */
-
-    elseif ($device_token === "") {
-
-        $message =
-            "Device Token is required.";
-
-        $message_type =
-            "error";
-    }
-
-    elseif (
-        !preg_match(
-            '/^[A-Za-z0-9_-]{8,100}$/',
-            $device_token
-        )
-    ) {
-
-        $message =
-            "Invalid Device Token.";
-
-        $message_type =
-            "error";
-    }
-
-
-    /* -----------------------------------------------------
-       VALIDATE CUSTOMER NAME
-    ----------------------------------------------------- */
-
-    elseif (
-        strlen($customer_name) > 100
-    ) {
-
-        $message =
-            "Customer name is too long.";
-
-        $message_type =
-            "error";
-    }
-
-
-    else {
-
-        $stmt =
-            $conn->prepare("
-                UPDATE controllers
-                SET
-                    controller_id = ?,
-                    customer_token = ?,
-                    device_token = ?,
-                    customer_name = ?,
-                    active = ?
-                WHERE controller_id = ?
-            ");
-
-
-        if (!$stmt) {
-
-            $message =
-                "Controller update preparation failed.";
-
-            $message_type =
-                "error";
-
-        } else {
-
-            /*
-             * IMPORTANT:
-             *
-             * 5 strings + 1 integer + 1 string
-             *
-             * Therefore:
-             *
-             * s s s s i s
-             *
-             * = ssssis
-             */
-
-            $stmt->bind_param(
-                "ssssis",
-                $controller_id,
-                $customer_token,
-                $device_token,
-                $customer_name,
-                $active,
-                $original_controller_id
-            );
-
-
-            try {
-
-                if ($stmt->execute()) {
-
-                    if (
-                        $stmt->affected_rows >= 0
-                    ) {
-
-                        $message =
-                            "Controller " .
-                            $controller_id .
-                            " updated successfully.";
-
-                        $message_type =
-                            "success";
-
-                    }
-
-                } else {
-
-                    $message =
-                        "Controller update failed.";
-
-                    $message_type =
-                        "error";
-                }
-
-            }
-            catch (mysqli_sql_exception $e) {
-
-                if (
-                    $e->getCode() == 1062
-                ) {
-
-                    $message =
-                        "Controller ID or Device Token already exists.";
-
-                } else {
-
-                    $message =
-                        "Could not update controller.";
-                }
-
-                $message_type =
-                    "error";
-            }
-
-
-            $stmt->close();
-        }
-    }
-}
-
-
-/* =========================================================
-   READ ALL CONTROLLERS
-========================================================= */
-
-$controllers = [];
-
-
-$result =
-    $conn->query("
-        SELECT
-            id,
-            controller_id,
-            customer_token,
-            device_token,
-            customer_name,
-            active,
-            last_seen,
-            start_time,
-            end_time
-        FROM controllers
-        ORDER BY controller_id
-    ");
-
-
-if ($result) {
-
-    while (
-        $row =
-        $result->fetch_assoc()
-    ) {
-
-        $controllers[] =
-            $row;
-    }
+        );
 }
 
 ?>
@@ -1180,10 +1739,10 @@ if ($result) {
 <meta charset="UTF-8">
 
 <meta name="viewport"
-   content="width=device-width, initial-scale=1.0">
+      content="width=device-width, initial-scale=1.0">
 
 <title>
-ESP-SWITCH5 - Owner Controller Management
+ESP-SWITCH5 REMOTE
 </title>
 
 <style>
@@ -1210,9 +1769,9 @@ body {
 
 .container {
 
-    max-width: 1100px;
+    max-width: 950px;
 
-    margin: 30px auto;
+    margin: auto;
 
     background: white;
 
@@ -1227,14 +1786,16 @@ body {
 
 .header {
 
+    position: relative;
+
     text-align: center;
 
     margin-bottom: 25px;
 }
 
-.header h1 {
+h1 {
 
-    margin: 0;
+    margin: 0 0 5px 0;
 
     color: #333;
 }
@@ -1242,47 +1803,61 @@ body {
 .subtitle {
 
     color: #666;
-
-    margin-top: 5px;
 }
 
-.top-buttons {
+.logout {
 
-    text-align: center;
+    position: absolute;
 
-    margin: 20px 0;
-}
+    right: 0;
 
-.top-buttons a {
-
-    display: inline-block;
+    top: 0;
 
     text-decoration: none;
 
+    background: #6c757d;
+
     color: white;
 
-    padding: 10px 18px;
+    padding: 8px 12px;
 
-    border-radius: 6px;
+    border-radius: 5px;
 
-    margin: 4px;
+    font-size: 13px;
+}
+
+.customer-controller {
+
+    background: #eef6ff;
+
+    border: 1px solid #b8d8f5;
+
+    border-radius: 10px;
+
+    padding: 15px;
+
+    text-align: center;
+
+    margin-bottom: 20px;
+}
+
+.customer-controller .id {
+
+    font-size: 24px;
 
     font-weight: bold;
 }
 
-.add-link {
+.customer-controller .customer {
 
-    background: #007bff;
+    margin-top: 5px;
+
+    color: #555;
 }
 
-.logout-link {
+.controller-box {
 
-    background: #6c757d;
-}
-
-.form-box {
-
-    background: #f8f9fa;
+    background: #f7f7f7;
 
     border: 1px solid #ddd;
 
@@ -1290,33 +1865,23 @@ body {
 
     padding: 20px;
 
-    margin-bottom: 25px;
+    margin-bottom: 20px;
 }
 
-.form-box h2 {
-
-    margin-top: 0;
-
-    text-align: center;
-}
-
-label {
+.controller-box label {
 
     display: block;
 
     font-weight: bold;
 
-    margin-bottom: 7px;
-
-    margin-top: 14px;
+    margin-bottom: 8px;
 }
 
-input[type="text"],
-select {
+.controller-box select {
 
     width: 100%;
 
-    padding: 11px;
+    padding: 12px;
 
     font-size: 16px;
 
@@ -1325,196 +1890,395 @@ select {
     border-radius: 6px;
 }
 
-.form-button {
+
+/* =========================================================
+   CUSTOMER / OWNER TIME INFORMATION
+========================================================= */
+
+.time-control {
+
+    background: #eef6ff;
+
+    border: 1px solid #b8d8f5;
+
+    border-radius: 10px;
+
+    padding: 20px;
+
+    margin-bottom: 25px;
+
+    text-align: center;
+}
+
+.time-control h2 {
+
+    margin-top: 0;
+
+    color: #333;
+}
+
+.timezone {
+
+    color: #555;
+
+    font-size: 14px;
+
+    margin-bottom: 20px;
+}
+
+.time-row {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(2, 1fr);
+
+    gap: 20px;
+
+    margin-bottom: 15px;
+}
+
+.time-box {
+
+    background: white;
+
+    border: 1px solid #ccc;
+
+    border-radius: 8px;
+
+    padding: 18px;
+}
+
+.time-box label {
+
+    display: block;
+
+    font-weight: bold;
+
+    margin-bottom: 10px;
+}
+
+.time-box input[type="datetime-local"] {
 
     width: 100%;
 
+    min-height: 52px;
+
     padding: 12px;
+
+    border: 2px solid #aaa;
+
+    border-radius: 8px;
+
+    font-size: 17px;
+
+    background: white;
+}
+
+.save-button {
+
+    margin-top: 12px;
+
+    width: 100%;
+
+    background: #007bff;
+
+    color: white;
 
     border: none;
 
     border-radius: 6px;
 
-    margin-top: 20px;
-
-    color: white;
+    padding: 12px;
 
     font-size: 16px;
-
-    font-weight: bold;
 
     cursor: pointer;
 }
 
-.add-button {
+.owner-limit {
 
-    background: #007bff;
-}
+    margin-top: 15px;
 
-.update-button {
+    padding: 12px;
 
-    background: #28a745;
-}
+    background: #fff3cd;
 
-.cancel-button {
-
-    display: block;
-
-    text-align: center;
-
-    margin-top: 10px;
-
-    padding: 11px;
-
-    background: #6c757d;
-
-    color: white;
-
-    text-decoration: none;
-
-    border-radius: 6px;
-}
-
-.message {
-
-    padding: 13px;
+    border: 1px solid #ffeeba;
 
     border-radius: 7px;
 
-    margin-bottom: 20px;
+    color: #856404;
 
-    text-align: center;
+    font-size: 14px;
+
+    line-height: 1.5;
+}
+
+.effective-time {
+
+    margin-top: 12px;
+
+    padding: 12px;
+
+    background: #d4edda;
+
+    border: 1px solid #c3e6cb;
+
+    border-radius: 7px;
+
+    color: #155724;
 
     font-weight: bold;
 }
 
-.success {
+.current-time-box {
 
-    background: #d4edda;
+    margin-top: 18px;
+
+    background: #fff;
+
+    border: 2px solid #28a745;
+
+    border-radius: 8px;
+
+    padding: 15px;
+}
+
+.current-time-title {
+
+    font-size: 14px;
+
+    color: #555;
+
+    margin-bottom: 5px;
+}
+
+.current-time {
+
+    font-size: 22px;
+
+    font-weight: bold;
 
     color: #155724;
 }
 
-.error {
-
-    background: #f8d7da;
-
-    color: #721c24;
-}
-
 
 /* =========================================================
-   TABLE
+   INFORMATION
 ========================================================= */
 
-.table-wrapper {
+.info {
 
-    overflow-x: auto;
+    display: grid;
 
-    margin-top: 20px;
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(170px, 1fr)
+        );
+
+    gap: 12px;
+
+    margin-bottom: 25px;
 }
 
-table {
+.info-card {
 
-    width: 100%;
-
-    border-collapse: collapse;
-
-    min-width: 900px;
-}
-
-th {
-
-    background: #343a40;
-
-    color: white;
-
-    padding: 11px;
-
-    text-align: center;
-}
-
-td {
+    background: #fafafa;
 
     border: 1px solid #ddd;
 
-    padding: 10px;
+    border-radius: 8px;
+
+    padding: 12px;
 
     text-align: center;
-
-    vertical-align: middle;
 }
 
-tr:nth-child(even) {
+.info-title {
 
-    background: #f8f8f8;
+    font-size: 13px;
+
+    color: #666;
+
+    margin-bottom: 5px;
 }
 
-.active {
+.info-value {
+
+    font-weight: bold;
+
+    font-size: 16px;
+}
+
+.online {
 
     color: #198754;
 
     font-weight: bold;
 }
 
-.inactive {
+.offline {
 
     color: #dc3545;
 
     font-weight: bold;
 }
 
-
-/* =========================================================
-   ACTION BUTTONS
-========================================================= */
-
-.action-button {
+.status-dot {
 
     display: inline-block;
 
-    border: none;
+    width: 12px;
 
-    border-radius: 5px;
+    height: 12px;
 
-    padding: 7px 11px;
+    border-radius: 50%;
 
-    margin: 2px;
-
-    color: white;
-
-    text-decoration: none;
-
-    cursor: pointer;
-
-    font-size: 13px;
-
-    font-weight: bold;
+    margin-right: 6px;
 }
 
-.edit-button {
-
-    background: #007bff;
-}
-
-.delete-button {
-
-    background: #dc3545;
-}
-
-.activate-button {
+.status-online {
 
     background: #28a745;
 }
 
-.deactivate-button {
+.status-offline {
 
-    background: #6c757d;
+    background: #dc3545;
 }
 
-.action-form {
 
-    display: inline;
+/* =========================================================
+   PIN GRID
+========================================================= */
+
+.pin-grid {
+
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(180px, 1fr)
+        );
+
+    gap: 15px;
+}
+
+.pin-card {
+
+    border: 1px solid #ccc;
+
+    border-radius: 10px;
+
+    padding: 18px;
+
+    text-align: center;
+
+    background: #fafafa;
+}
+
+.pin-name {
+
+    font-size: 20px;
+
+    font-weight: bold;
+
+    margin-bottom: 10px;
+}
+
+.state {
+
+    font-size: 18px;
+
+    font-weight: bold;
+
+    margin-bottom: 12px;
+}
+
+.state-on {
+
+    color: green;
+}
+
+.state-off {
+
+    color: red;
+}
+
+.pin-form {
+
+    display: inline-block;
+
+    margin: 0;
+}
+
+button {
+
+    border: none;
+
+    border-radius: 6px;
+
+    padding: 10px 16px;
+
+    margin: 4px;
+
+    font-size: 15px;
+
+    cursor: pointer;
+}
+
+.on-btn {
+
+    background: #28a745;
+
+    color: white;
+}
+
+.off-btn {
+
+    background: #dc3545;
+
+    color: white;
+}
+
+button:hover {
+
+    opacity: 0.85;
+}
+
+
+/* =========================================================
+   MESSAGE
+========================================================= */
+
+.message {
+
+    text-align: center;
+
+    margin: 20px 0;
+
+    padding: 10px;
+
+    border-radius: 6px;
+
+    font-weight: bold;
+}
+
+.success {
+
+    color: #155724;
+
+    background: #d4edda;
+}
+
+.error {
+
+    color: #721c24;
+
+    background: #f8d7da;
 }
 
 
@@ -1525,19 +2289,34 @@ tr:nth-child(even) {
 @media (max-width: 600px) {
 
     body {
-
         padding: 10px;
     }
 
     .container {
-
         padding: 15px;
     }
 
-    table {
+    .logout {
 
-        min-width: 850px;
+        position: static;
+
+        display: inline-block;
+
+        margin-top: 10px;
     }
+
+    .pin-grid {
+
+        grid-template-columns:
+            1fr 1fr;
+    }
+
+    .time-row {
+
+        grid-template-columns:
+            1fr;
+    }
+
 }
 
 </style>
@@ -1548,9 +2327,6 @@ tr:nth-child(even) {
 
 <div class="container">
 
-<!-- ======================================================
-     HEADER
-====================================================== -->
 
 <div class="header">
 
@@ -1559,49 +2335,185 @@ ESP-SWITCH5 REMOTE
 </h1>
 
 <div class="subtitle">
-OWNER CONTROLLER MANAGEMENT
-</div>
-
-</div>
-
-<!-- ======================================================
-     TOP BUTTONS
-====================================================== -->
-
-<div class="top-buttons">
-
-<a
-href="owner_token.php"
-class="add-link"
-
->
-
-ADD NEW CONTROLLER </a>
-
-<a
-href="owner_token.php?logout=1"
-class="logout-link"
-
->
-
-OWNER LOGOUT </a>
-
-</div>
-
-<!-- ======================================================
-     MESSAGE
-====================================================== -->
 
 <?php
+
+if ($customer_mode) {
+
+    echo "Customer Controller";
+
+} else {
+
+    echo "Remote ESP8266 Control Panel";
+}
+
+?>
+
+</div>
+
+
+<?php
+
+if (!$customer_mode) {
+
+?>
+
+<a
+    class="logout"
+    href="index.php?logout=1"
+>
+Logout
+</a>
+
+<?php
+
+}
+
+?>
+
+</div>
+
+
+<?php
+
+if ($customer_mode) {
+
+?>
+
+<div class="customer-controller">
+
+<div class="id">
+
+<?php
+
+echo htmlspecialchars(
+    $selected_controller,
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</div>
+
+<div class="customer">
+
+<?php
+
+echo htmlspecialchars(
+    $selected_customer,
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</div>
+
+</div>
+
+<?php
+
+}
+
+
+if (!$customer_mode) {
+
+?>
+
+<div class="controller-box">
+
+<label for="controller">
+Select Controller
+</label>
+
+<select
+    id="controller"
+    onchange="selectController(this.value)"
+>
+
+<option value="">
+-- Select Controller --
+</option>
+
+<?php
+
+foreach (
+    $controllers
+    as $controller
+) {
+
+?>
+
+<option
+value="<?php
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+<?php
+
+if (
+    $selected_controller ===
+    $controller["controller_id"]
+) {
+    echo "selected";
+}
+
+?>
+>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+if (
+    !empty(
+        $controller["customer_name"]
+    )
+) {
+
+    echo " - ";
+
+    echo htmlspecialchars(
+        $controller["customer_name"],
+        ENT_QUOTES,
+        "UTF-8"
+    );
+}
+
+?>
+
+</option>
+
+<?php
+
+}
+
+?>
+
+</select>
+
+</div>
+
+<?php
+
+}
+
 
 if ($message !== "") {
 
 ?>
 
 <div
-    class="message
-    <?php
-
+class="message
+<?php
 
 echo
     $message_type === "success"
@@ -1609,8 +2521,6 @@ echo
         : "error";
 
 ?>"
-
-
 >
 
 <?php
@@ -1629,205 +2539,524 @@ echo htmlspecialchars(
 
 }
 
+
+if ($selected_controller !== "") {
+
 ?>
+
 
 <!-- ======================================================
-     ADD / EDIT FORM
+     TIME CONTROL
 ====================================================== -->
 
-<?php
-
-if ($edit_controller !== null) {
-
-?>
-
-<div class="form-box">
+<div class="time-control">
 
 <h2>
-EDIT CONTROLLER
+Calendar Time Control
 </h2>
+
+<div class="timezone">
+
+Customer schedule is controlled by the Owner limit.
+
+<br>
+
+Timezone: Asia/Kolkata (IST)
+
+</div>
+
+
+<div class="time-row">
+
+
+<!-- CUSTOMER START -->
+
+<div class="time-box">
 
 <form method="post">
 
-<input
-type="hidden"
-name="original_controller_id"
-value="<?php
+<?php
 
-
-echo htmlspecialchars(
-    $edit_controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-
-
->
-
-<label for="edit_controller_id">
-Controller ID
-</label>
-
-<input
-type="text"
-id="edit_controller_id"
-name="controller_id"
-maxlength="50"
-value="<?php
-
-
-echo htmlspecialchars(
-    $edit_controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-required
-
-
->
-
-<label for="edit_customer_token">
-Customer Token
-</label>
-
-<input
-type="text"
-id="edit_customer_token"
-name="customer_token"
-maxlength="100"
-value="<?php
-
-
-echo htmlspecialchars(
-    $edit_controller["customer_token"] ?? "",
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-autocomplete="off"
-
-
->
-
-<label for="edit_device_token">
-Device Token
-</label>
-
-<input
-type="text"
-id="edit_device_token"
-name="device_token"
-maxlength="100"
-value="<?php
-
-
-echo htmlspecialchars(
-    $edit_controller["device_token"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-autocomplete="off"
-required
-
-
->
-
-<label for="edit_customer_name">
-Customer Name
-</label>
-
-<input
-type="text"
-id="edit_customer_name"
-name="customer_name"
-maxlength="100"
-value="<?php
-
-
-echo htmlspecialchars(
-    $edit_controller["customer_name"] ?? "",
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-
-
->
-
-<label for="edit_active">
-Status
-</label>
-
-<select
-id="edit_active"
-name="active"
-
->
-
-<option
-    value="1"
-    <?php
-
-
-echo
-    ((int)$edit_controller["active"] === 1)
-        ? "selected"
-        : "";
+if (!$customer_mode) {
 
 ?>
 
-
+<input
+    type="hidden"
+    name="controller_id"
+    value="<?php
+    echo htmlspecialchars(
+        $selected_controller,
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>"
 >
 
-ACTIVE
+<?php
 
-</option>
-
-<option
-    value="0"
-    <?php
-
-
-echo
-    ((int)$edit_controller["active"] === 0)
-        ? "selected"
-        : "";
+}
 
 ?>
 
+<label>
+CUSTOMER START TIME
+</label>
 
+<input
+    type="datetime-local"
+    name="start_time"
+    value="<?php
+    echo htmlspecialchars(
+        $start_input_value,
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>"
+    required
 >
-
-INACTIVE
-
-</option>
-
-</select>
 
 <button
 type="submit"
-name="update_controller"
-class="form-button update-button"
+name="save_start"
+class="save-button"
+>
+SAVE START
+</button>
 
+</form>
+
+</div>
+
+
+<!-- CUSTOMER END -->
+
+<div class="time-box">
+
+<form method="post">
+
+<?php
+
+if (!$customer_mode) {
+
+?>
+
+<input
+    type="hidden"
+    name="controller_id"
+    value="<?php
+    echo htmlspecialchars(
+        $selected_controller,
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>"
 >
 
-UPDATE CONTROLLER </button>
+<?php
 
-<a
-href="owner_token.php"
-class="cancel-button"
+}
 
+?>
+
+<label>
+CUSTOMER END TIME
+</label>
+
+<input
+    type="datetime-local"
+    name="end_time"
+    value="<?php
+    echo htmlspecialchars(
+        $end_input_value,
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>"
+    required
 >
 
-CANCEL EDIT </a>
+<button
+type="submit"
+name="save_end"
+class="save-button"
+>
+SAVE END
+</button>
+
+</form>
+
+</div>
+
+</div>
+
+
+<!-- OWNER LIMIT -->
+
+<div class="owner-limit">
+
+<strong>OWNER CONTROL</strong>
+
+<br><br>
+
+OWNER START:
+
+<?php
+
+echo
+    !empty($selected_owner_start_time)
+        ? htmlspecialchars(
+            $selected_owner_start_time,
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "Not set";
+
+?>
+
+<br>
+
+OWNER END:
+
+<?php
+
+echo
+    !empty($selected_owner_end_time)
+        ? htmlspecialchars(
+            $selected_owner_end_time,
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "Not set";
+
+?>
+
+<br><br>
+
+The customer cannot operate outside the owner's permitted time.
+
+</div>
+
+
+<!-- EFFECTIVE LIMIT -->
+
+<div class="effective-time">
+
+EFFECTIVE START:
+
+<?php
+
+echo
+    $effective_start_display !== ""
+        ? htmlspecialchars(
+            $effective_start_display,
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "No limit";
+
+?>
+
+<br>
+
+EFFECTIVE END:
+
+<?php
+
+echo
+    $effective_end_display !== ""
+        ? htmlspecialchars(
+            $effective_end_display,
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "No limit";
+
+?>
+
+</div>
+
+
+<!-- CURRENT TIME -->
+
+<div class="current-time-box">
+
+<div class="current-time-title">
+
+CURRENT TIME
+
+</div>
+
+<div
+    class="current-time"
+    id="currentTime"
+>
+Loading...
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ======================================================
+     CONTROLLER INFORMATION
+====================================================== -->
+
+<div class="info">
+
+
+<div class="info-card">
+
+<div class="info-title">
+Controller ID
+</div>
+
+<div class="info-value">
+
+<?php
+
+echo htmlspecialchars(
+    $selected_controller,
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</div>
+
+</div>
+
+
+<div class="info-card">
+
+<div class="info-title">
+Customer
+</div>
+
+<div class="info-value">
+
+<?php
+
+echo htmlspecialchars(
+    $selected_customer,
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</div>
+
+</div>
+
+
+<div class="info-card">
+
+<div class="info-title">
+Controller Status
+</div>
+
+<div
+    class="info-value"
+    id="onlineStatus"
+>
+Checking...
+</div>
+
+</div>
+
+
+<div class="info-card">
+
+<div class="info-title">
+Last Seen
+</div>
+
+<div
+    class="info-value"
+    id="lastSeen"
+>
+
+<?php
+
+echo htmlspecialchars(
+    $selected_last_seen,
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</div>
+
+</div>
+
+</div>
+
+
+<!-- ======================================================
+     D1-D8
+====================================================== -->
+
+<div class="pin-grid">
+
+<?php
+
+for (
+    $i = 1;
+    $i <= 8;
+    $i++
+) {
+
+    $pin =
+        "D" . $i;
+
+    $value =
+        $pin_values[$pin];
+
+?>
+
+<div class="pin-card">
+
+<div class="pin-name">
+
+<?php
+echo $pin;
+?>
+
+</div>
+
+
+<div
+class="state
+<?php
+
+echo
+    $value
+        ? "state-on"
+        : "state-off";
+
+?>"
+>
+
+<?php
+
+echo
+    $value
+        ? "ON"
+        : "OFF";
+
+?>
+
+</div>
+
+
+<form
+method="post"
+class="pin-form"
+>
+
+<?php
+
+if (!$customer_mode) {
+
+?>
+
+<input
+type="hidden"
+name="controller_id"
+value="<?php
+echo htmlspecialchars(
+    $selected_controller,
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+<?php
+
+}
+
+?>
+
+<input
+type="hidden"
+name="pin"
+value="<?php
+echo $pin;
+?>"
+>
+
+<input
+type="hidden"
+name="value"
+value="1"
+>
+
+<button
+type="submit"
+name="set_pin"
+class="on-btn"
+>
+ON
+</button>
+
+</form>
+
+
+<form
+method="post"
+class="pin-form"
+>
+
+<?php
+
+if (!$customer_mode) {
+
+?>
+
+<input
+type="hidden"
+name="controller_id"
+value="<?php
+echo htmlspecialchars(
+    $selected_controller,
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+<?php
+
+}
+
+?>
+
+<input
+type="hidden"
+name="pin"
+value="<?php
+echo $pin;
+?>"
+>
+
+<input
+type="hidden"
+name="value"
+value="0"
+>
+
+<button
+type="submit"
+name="set_pin"
+class="off-btn"
+>
+OFF
+</button>
 
 </form>
 
@@ -1835,105 +3064,22 @@ CANCEL EDIT </a>
 
 <?php
 
+}
+
+?>
+
+</div>
+
+
+<?php
+
 } else {
 
 ?>
 
-<div class="form-box">
+<div class="message error">
 
-<h2>
-ADD NEW CONTROLLER
-</h2>
-
-<form method="post">
-
-<label for="controller_id">
-Controller ID
-</label>
-
-<input
-type="text"
-id="controller_id"
-name="controller_id"
-maxlength="50"
-placeholder="Example: ESP0001"
-required
-autocomplete="off"
-
->
-
-<label for="customer_token">
-Customer Token
-</label>
-
-<input
-type="text"
-id="customer_token"
-name="customer_token"
-maxlength="100"
-placeholder="Example: ESP0001-CUST-ABC123"
-autocomplete="off"
-
->
-
-<label for="device_token">
-Device Token
-</label>
-
-<input
-type="text"
-id="device_token"
-name="device_token"
-maxlength="100"
-placeholder="Example: ESP0001-TOKEN-2026-RAVI1"
-required
-autocomplete="off"
-
->
-
-<label for="customer_name">
-Customer Name
-</label>
-
-<input
-type="text"
-id="customer_name"
-name="customer_name"
-maxlength="100"
-placeholder="Example: Test Customer"
-
->
-
-<label for="active">
-Status
-</label>
-
-<select
-id="active"
-name="active"
-
->
-
-<option value="1">
-ACTIVE
-</option>
-
-<option value="0">
-INACTIVE
-</option>
-
-</select>
-
-<button
-type="submit"
-name="add_controller"
-class="form-button add-button"
-
->
-
-ADD CONTROLLER </button>
-
-</form>
+Please select a controller.
 
 </div>
 
@@ -1943,448 +3089,314 @@ ADD CONTROLLER </button>
 
 ?>
 
-<!-- ======================================================
-     CONTROLLER TABLE
-====================================================== -->
+</div>
 
-<div class="form-box">
 
-<h2>
-ALL CONTROLLERS
-</h2>
+<script>
 
-<div class="table-wrapper">
+/* =========================================================
+   SELECT CONTROLLER
+========================================================= */
 
-<table>
+function selectController(id)
+{
 
-<thead>
+    if (id === "")
+    {
 
-<tr>
+        window.location.href =
+            "index.php";
 
-<th>
-ID
-</th>
-
-<th>
-CONTROLLER ID
-</th>
-
-<th>
-CUSTOMER TOKEN
-</th>
-
-<th>
-DEVICE TOKEN
-</th>
-
-<th>
-CUSTOMER NAME
-</th>
-
-<th>
-STATUS
-</th>
-
-<th>
-LAST SEEN
-</th>
-
-<th>
-ACTIONS
-</th>
-
-</tr>
-
-</thead>
-
-<tbody>
-
-<?php
-
-if (
-    count($controllers) === 0
-) {
-
-?>
-
-<tr>
-
-<td
-    colspan="8"
->
-No controllers found.
-</td>
-
-</tr>
-
-<?php
-
-} else {
-
-    foreach (
-        $controllers
-        as $controller
-    ) {
-
-?>
-
-<tr>
-
-<td>
-
-<?php
-
-echo htmlspecialchars(
-    $controller["id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</td>
-
-<td>
-
-<strong>
-
-<?php
-
-echo htmlspecialchars(
-    $controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</strong>
-
-</td>
-
-<td>
-
-<?php
-
-echo htmlspecialchars(
-    $controller["customer_token"] ?? "",
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</td>
-
-<td>
-
-<?php
-
-echo htmlspecialchars(
-    $controller["device_token"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</td>
-
-<td>
-
-<?php
-
-echo htmlspecialchars(
-    $controller["customer_name"] ?? "",
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</td>
-
-<td>
-
-<?php
-
-if (
-    (int)$controller["active"] === 1
-) {
-
-?>
-
-<span class="active">
-ACTIVE
-</span>
-
-<?php
-
-} else {
-
-?>
-
-<span class="inactive">
-INACTIVE
-</span>
-
-<?php
-
-}
-
-?>
-
-</td>
-
-<td>
-
-<?php
-
-echo htmlspecialchars(
-    $controller["last_seen"] ?? "Not yet seen",
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</td>
-
-<td>
-
-<!-- EDIT -->
-
-<a
-href="owner_token.php?edit=<?php
-
-
-echo rawurlencode(
-    $controller["controller_id"]
-);
-
-?>"
-class="action-button edit-button"
-
-
->
-
-EDIT </a>
-
-<!-- ACTIVATE / DEACTIVATE -->
-
-<?php
-
-if (
-    (int)$controller["active"] === 1
-) {
-
-?>
-
-<form
-    method="post"
-    class="action-form"
-    onsubmit="return confirm(
-        'Deactivate controller <?php
-        echo htmlspecialchars(
-            $controller["controller_id"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-        ?>?'
-    );"
->
-
-<input
-type="hidden"
-name="controller_id"
-value="<?php
-
-
-echo htmlspecialchars(
-    $controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-
-
->
-
-<button
-type="submit"
-name="deactivate_controller"
-class="action-button deactivate-button"
-
->
-
-DEACTIVATE </button>
-
-</form>
-
-<?php
-
-} else {
-
-?>
-
-<form
-    method="post"
-    class="action-form"
-    onsubmit="return confirm(
-        'Activate controller <?php
-        echo htmlspecialchars(
-            $controller["controller_id"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-        ?>?'
-    );"
->
-
-<input
-type="hidden"
-name="controller_id"
-value="<?php
-
-
-echo htmlspecialchars(
-    $controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-
-
->
-
-<button
-type="submit"
-name="activate_controller"
-class="action-button activate-button"
-
->
-
-ACTIVATE </button>
-
-</form>
-
-<?php
-
-}
-
-?>
-
-<!-- DELETE -->
-
-<form
-    method="post"
-    class="action-form"
-    onsubmit="return confirm(
-        'WARNING!\\n\\n' +
-        'Permanently DELETE controller <?php
-        echo htmlspecialchars(
-            $controller["controller_id"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-        ?>?\\n\\n' +
-        'The complete row in the controllers table will be deleted.\\n\\n' +
-        'This action cannot be undone.'
-    );"
->
-
-<input
-type="hidden"
-name="controller_id"
-value="<?php
-
-
-echo htmlspecialchars(
-    $controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>"
-
-
->
-
-<button
-type="submit"
-name="delete_controller"
-class="action-button delete-button"
-
->
-
-DELETE </button>
-
-</form>
-
-</td>
-
-</tr>
-
-<?php
-
+        return;
     }
 
+    window.location.href =
+        "index.php?controller_id=" +
+        encodeURIComponent(id);
 }
 
-?>
 
-</tbody>
+/* =========================================================
+   CURRENT IST TIME
+========================================================= */
 
-</table>
+function updateCurrentTime()
+{
 
-</div>
+    const now =
+        new Date();
 
-</div>
+    const options = {
 
-<!-- ======================================================
-     IMPORTANT NOTE
-====================================================== -->
+        timeZone:
+            "Asia/Kolkata",
 
-<div class="form-box">
+        year:
+            "numeric",
 
-<strong>
-IMPORTANT:
-</strong>
+        month:
+            "2-digit",
 
-<br><br>
+        day:
+            "2-digit",
 
-<strong>ADD</strong> creates a new record in the <strong>controllers</strong> table.
+        hour:
+            "2-digit",
 
-<br><br>
+        minute:
+            "2-digit",
 
-<strong>EDIT</strong> changes the selected controller
-record.
+        second:
+            "2-digit",
 
-<br><br>
+        hour12:
+            false
+    };
 
-<strong>ACTIVATE / DEACTIVATE</strong> changes only the <strong>active</strong> field.
 
-<br><br>
+    const parts =
+        new Intl.DateTimeFormat(
+            "en-GB",
+            options
+        ).formatToParts(now);
 
-<strong>DELETE</strong> permanently deletes the complete
-selected row from the <strong>controllers</strong> table.
 
-<br><br>
+    let data = {};
 
-Deleting a controller from this page does <strong>not</strong> delete its record from <strong>esp_control</strong>.
 
-<br><br>
+    parts.forEach(
+        function(part)
+        {
 
-The ESP8266 must contain the same <strong>controller_id</strong> and <strong>device_token</strong> values as the database
-when it communicates with the server.
+            if (
+                part.type !==
+                "literal"
+            )
+            {
 
-</div>
+                data[part.type] =
+                    part.value;
+            }
 
-</div>
+        }
+    );
+
+
+    const formatted =
+        data.year +
+        "-" +
+        data.month +
+        "-" +
+        data.day +
+        " " +
+        data.hour +
+        ":" +
+        data.minute +
+        ":" +
+        data.second;
+
+
+    const element =
+        document.getElementById(
+            "currentTime"
+        );
+
+
+    if (element)
+    {
+
+        element.textContent =
+            formatted +
+            " IST";
+    }
+}
+
+
+updateCurrentTime();
+
+
+setInterval(
+    updateCurrentTime,
+    1000
+);
+
+
+/* =========================================================
+   ONLINE STATUS
+========================================================= */
+
+function updateOnlineStatus()
+{
+
+    const lastSeenElement =
+        document.getElementById(
+            "lastSeen"
+        );
+
+    const statusElement =
+        document.getElementById(
+            "onlineStatus"
+        );
+
+
+    if (
+        !lastSeenElement ||
+        !statusElement
+    )
+    {
+        return;
+    }
+
+
+    const text =
+        lastSeenElement
+        .textContent
+        .trim();
+
+
+    if (
+        text === "" ||
+        text === "Not yet seen"
+    )
+    {
+
+        statusElement.innerHTML =
+            '<span class="status-dot status-offline"></span>OFFLINE';
+
+        statusElement.className =
+            "info-value offline";
+
+        return;
+    }
+
+
+    const lastSeen =
+        new Date(
+            text.replace(
+                " ",
+                "T"
+            )
+        );
+
+
+    if (
+        isNaN(
+            lastSeen.getTime()
+        )
+    )
+    {
+
+        statusElement.innerHTML =
+            '<span class="status-dot status-offline"></span>OFFLINE';
+
+        statusElement.className =
+            "info-value offline";
+
+        return;
+    }
+
+
+    const difference =
+        (
+            new Date().getTime() -
+            lastSeen.getTime()
+        ) / 1000;
+
+
+    if (difference <= 10)
+    {
+
+        statusElement.innerHTML =
+            '<span class="status-dot status-online"></span>ONLINE';
+
+        statusElement.className =
+            "info-value online";
+
+    }
+    else
+    {
+
+        statusElement.innerHTML =
+            '<span class="status-dot status-offline"></span>OFFLINE';
+
+        statusElement.className =
+            "info-value offline";
+    }
+}
+
+
+updateOnlineStatus();
+
+
+/* =========================================================
+   REFRESH
+========================================================= */
+
+let timeEditing = false;
+
+
+const timeInputs =
+    document.querySelectorAll(
+        'input[type="datetime-local"]'
+    );
+
+
+timeInputs.forEach(
+    function(input)
+    {
+
+        input.addEventListener(
+            "focus",
+            function()
+            {
+                timeEditing = true;
+            }
+        );
+
+        input.addEventListener(
+            "click",
+            function()
+            {
+                timeEditing = true;
+            }
+        );
+
+    }
+);
+
+
+setInterval(
+    function()
+    {
+
+        if (timeEditing)
+        {
+            return;
+        }
+
+
+        <?php
+
+        if (
+            $selected_controller !== ""
+        ) {
+
+        ?>
+
+        window.location.reload();
+
+        <?php
+
+        }
+
+        ?>
+
+    },
+    3000
+);
+
+</script>
 
 </body>
 
 </html>
-::
