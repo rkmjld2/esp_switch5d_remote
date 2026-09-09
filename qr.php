@@ -1,160 +1,52 @@
+```php
 <?php
 
 /*
 ============================================================
  ESP-SWITCH5 REMOTE
- CUSTOMER QR CODE
-============================================================
-
- IMPORTANT:
-
- Only administrator can generate/view a customer QR code.
-
- The QR code contains:
-
- /c/ESP0001?t=CUSTOMER_TOKEN
-
+ QR CODE PAGE
 ============================================================
 */
 
 require_once __DIR__ . "/config.php";
 require_once __DIR__ . "/db.php";
 
-date_default_timezone_set("Asia/Kolkata");
-
-session_start();
-
 
 /* =========================================================
-   ADMINISTRATOR LOGIN REQUIRED
-========================================================= */
-
-if (
-    !isset($_SESSION["esp_admin"]) ||
-    $_SESSION["esp_admin"] !== true
-) {
-
-    http_response_code(403);
-
-    die("
-        <!DOCTYPE html>
-
-        <html>
-
-        <head>
-
-        <meta charset='UTF-8'>
-
-        <meta name='viewport'
-              content='width=device-width, initial-scale=1.0'>
-
-        <title>Access Denied</title>
-
-        <style>
-
-        body {
-
-            margin: 0;
-
-            padding: 30px;
-
-            font-family:
-                Arial,
-                Helvetica,
-                sans-serif;
-
-            background: #f2f2f2;
-        }
-
-        .box {
-
-            max-width: 500px;
-
-            margin: 80px auto;
-
-            padding: 30px;
-
-            background: white;
-
-            border-radius: 12px;
-
-            box-shadow:
-                0 3px 15px
-                rgba(0,0,0,0.15);
-
-            text-align: center;
-        }
-
-        h1 {
-
-            color: #dc3545;
-        }
-
-        </style>
-
-        </head>
-
-        <body>
-
-        <div class='box'>
-
-        <h1>ACCESS DENIED</h1>
-
-        <p>
-        Administrator login is required.
-        </p>
-
-        </div>
-
-        </body>
-
-        </html>
-    ");
-
-}
-
-
-/* =========================================================
-   CONTROLLER ID
+   GET CONTROLLER ID
 ========================================================= */
 
 $controller_id =
-    trim(
-        $_GET["controller_id"] ?? ""
-    );
+    trim($_GET["controller_id"] ?? "");
+
+
+/* =========================================================
+   CHECK CONTROLLER ID
+========================================================= */
+
+if ($controller_id === "") {
+    die("Controller ID missing.");
+}
 
 
 /* =========================================================
    VALIDATE CONTROLLER ID
 ========================================================= */
 
-if ($controller_id === "") {
-
-    die("Controller ID missing.");
-}
-
-
-if (
-    !preg_match(
-        '/^[A-Za-z0-9_-]+$/',
-        $controller_id
-    )
-) {
-
+if (!preg_match('/^[A-Za-z0-9_-]+$/', $controller_id)) {
     die("Invalid Controller ID.");
 }
 
 
 /* =========================================================
-   GET CONTROLLER
+   GET CUSTOMER TOKEN FOR THIS CONTROLLER
 ========================================================= */
 
 $stmt = $conn->prepare("
     SELECT
         controller_id,
-        customer_name,
-        active,
-        customer_token
+        customer_token,
+        customer_name
     FROM controllers
     WHERE controller_id = ?
     LIMIT 1
@@ -162,8 +54,7 @@ $stmt = $conn->prepare("
 
 
 if (!$stmt) {
-
-    die("Controller query preparation failed.");
+    die("Database preparation failed.");
 }
 
 
@@ -177,7 +68,7 @@ if (!$stmt->execute()) {
 
     $stmt->close();
 
-    die("Controller query failed.");
+    die("Database query failed.");
 }
 
 
@@ -185,9 +76,11 @@ $result =
     $stmt->get_result();
 
 
-if (
-    $result->num_rows === 0
-) {
+/* =========================================================
+   CHECK CONTROLLER EXISTS
+========================================================= */
+
+if ($result->num_rows === 0) {
 
     $stmt->close();
 
@@ -203,7 +96,7 @@ $stmt->close();
 
 
 /* =========================================================
-   CUSTOMER TOKEN REQUIRED
+   GET CUSTOMER TOKEN
 ========================================================= */
 
 $customer_token =
@@ -214,10 +107,9 @@ $customer_token =
 
 if ($customer_token === "") {
 
-    die("
-        Customer token has not been assigned
-        to this controller.
-    ");
+    die(
+        "Customer token is not available for this controller."
+    );
 }
 
 
@@ -225,32 +117,11 @@ if ($customer_token === "") {
    CREATE CUSTOMER CONTROLLER URL
 ========================================================= */
 
-$scheme =
-    (
-        isset($_SERVER["HTTPS"]) &&
-        $_SERVER["HTTPS"] !== "off"
-    )
-    ? "https"
-    : "https";
-
-
-$host =
-    $_SERVER["HTTP_HOST"]
-    ?? "esp-switch5-remote.onrender.com";
-
-
 $controller_url =
-    $scheme .
-    "://" .
-    $host .
-    "/c/" .
-    rawurlencode(
-        $controller_id
-    ) .
+    "https://esp-switch5d-remote.onrender.com/c/" .
+    rawurlencode($controller_id) .
     "?t=" .
-    rawurlencode(
-        $customer_token
-    );
+    rawurlencode($customer_token);
 
 ?>
 
@@ -265,15 +136,12 @@ $controller_url =
 <meta name="viewport"
       content="width=device-width, initial-scale=1.0">
 
-<title>
-Controller QR Code
-</title>
+<title>Controller QR Code</title>
 
 
 <style>
 
 * {
-
     box-sizing: border-box;
 }
 
@@ -296,7 +164,7 @@ body {
 
 .box {
 
-    max-width: 550px;
+    max-width: 500px;
 
     margin: auto;
 
@@ -319,6 +187,7 @@ h1 {
     margin-top: 0;
 
     color: #333;
+
 }
 
 
@@ -328,15 +197,8 @@ h1 {
 
     font-weight: bold;
 
-    margin: 15px 0 5px 0;
-}
+    margin: 15px 0 25px 0;
 
-
-.customer {
-
-    color: #555;
-
-    margin-bottom: 25px;
 }
 
 
@@ -347,6 +209,7 @@ h1 {
     height: 300px;
 
     margin: 0 auto;
+
 }
 
 
@@ -356,6 +219,7 @@ h1 {
     display: block;
 
     margin: auto;
+
 }
 
 
@@ -368,6 +232,7 @@ h1 {
     font-size: 15px;
 
     word-break: break-all;
+
 }
 
 
@@ -376,18 +241,21 @@ h1 {
     color: #007bff;
 
     text-decoration: none;
+
 }
 
 
 .url a:hover {
 
     text-decoration: underline;
+
 }
 
 
 .buttons {
 
     margin-top: 20px;
+
 }
 
 
@@ -409,6 +277,7 @@ button,
     cursor: pointer;
 
     text-decoration: none;
+
 }
 
 
@@ -417,6 +286,7 @@ button,
     background: #28a745;
 
     color: white;
+
 }
 
 
@@ -425,6 +295,7 @@ button,
     background: #007bff;
 
     color: white;
+
 }
 
 
@@ -433,6 +304,7 @@ button,
     background: #6c757d;
 
     color: white;
+
 }
 
 
@@ -440,10 +312,13 @@ button:hover,
 .open-button:hover {
 
     opacity: 0.85;
+
 }
 
 
-/* PRINT */
+/* =========================================================
+   PRINT
+========================================================= */
 
 @media print {
 
@@ -452,6 +327,7 @@ button:hover,
         background: white;
 
         padding: 0;
+
     }
 
     .box {
@@ -459,13 +335,16 @@ button:hover,
         border: none;
 
         box-shadow: none;
+
     }
 
     .buttons,
     .url {
 
         display: none;
+
     }
+
 }
 
 </style>
@@ -488,77 +367,54 @@ ESP-SWITCH5 REMOTE
 
 Controller:
 
-<?php
-
-echo htmlspecialchars(
+<?= htmlspecialchars(
     $controller_id,
     ENT_QUOTES,
     "UTF-8"
-);
-
-?>
+) ?>
 
 </div>
 
 
-<div class="customer">
-
-Customer:
-
-<?php
-
-echo htmlspecialchars(
-    $controller["customer_name"] ?? "",
-    ENT_QUOTES,
-    "UTF-8"
-);
-
-?>
-
-</div>
-
-
-<!-- QR -->
+<!-- ======================================================
+     QR CODE
+======================================================= -->
 
 <div id="qrcode"></div>
 
 
-<!-- CUSTOMER URL -->
+<!-- ======================================================
+     CONTROLLER URL
+======================================================= -->
 
 <div class="url">
 
 <a
-    href="<?php
-
-    echo htmlspecialchars(
+    href="<?= htmlspecialchars(
         $controller_url,
         ENT_QUOTES,
         "UTF-8"
-    );
-
-    ?>"
+    ) ?>"
     target="_blank"
 >
-
-<?php
-
-echo htmlspecialchars(
+<?= htmlspecialchars(
     $controller_url,
     ENT_QUOTES,
     "UTF-8"
-);
-
-?>
-
+) ?>
 </a>
 
 </div>
 
 
-<!-- BUTTONS -->
+<!-- ======================================================
+     BUTTONS
+======================================================= -->
 
 <div class="buttons">
 
+
+<!-- DOWNLOAD -->
 
 <button
     type="button"
@@ -569,6 +425,8 @@ DOWNLOAD QR CODE
 </button>
 
 
+<!-- PRINT -->
+
 <button
     type="button"
     class="print-button"
@@ -578,17 +436,15 @@ PRINT QR CODE
 </button>
 
 
+<!-- OPEN CONTROLLER -->
+
 <a
     class="open-button"
-    href="<?php
-
-    echo htmlspecialchars(
+    href="<?= htmlspecialchars(
         $controller_url,
         ENT_QUOTES,
         "UTF-8"
-    );
-
-    ?>"
+    ) ?>"
     target="_blank"
 >
 OPEN CONTROLLER
@@ -601,7 +457,9 @@ OPEN CONTROLLER
 </div>
 
 
-<!-- QR CODE LIBRARY -->
+<!-- ======================================================
+     QR CODE LIBRARY
+======================================================= -->
 
 <script
 src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js">
@@ -611,37 +469,23 @@ src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js">
 <script>
 
 /* =========================================================
-   CUSTOMER URL
+   CONTROLLER URL
 ========================================================= */
 
 const controllerURL =
-    <?php
-
-    echo json_encode(
-        $controller_url
-    );
-
-    ?>;
+    <?= json_encode($controller_url) ?>;
 
 
 const controllerID =
-    <?php
-
-    echo json_encode(
-        $controller_id
-    );
-
-    ?>;
+    <?= json_encode($controller_id) ?>;
 
 
 /* =========================================================
-   GENERATE QR
+   GENERATE QR CODE
 ========================================================= */
 
 const qrContainer =
-    document.getElementById(
-        "qrcode"
-    );
+    document.getElementById("qrcode");
 
 
 const qr =
@@ -651,14 +495,11 @@ const qr =
 
         {
 
-            text:
-                controllerURL,
+            text: controllerURL,
 
-            width:
-                300,
+            width: 300,
 
-            height:
-                300,
+            height: 300,
 
             correctLevel:
                 QRCode.CorrectLevel.H
@@ -669,81 +510,63 @@ const qr =
 
 
 /* =========================================================
-   DOWNLOAD QR
+   DOWNLOAD QR CODE
 ========================================================= */
 
 function downloadQR()
 {
 
     const canvas =
-        qrContainer.querySelector(
-            "canvas"
-        );
+        qrContainer.querySelector("canvas");
 
 
     if (canvas)
     {
 
         const link =
-            document.createElement(
-                "a"
-            );
+            document.createElement("a");
 
 
         link.download =
-            controllerID +
-            "_QR.png";
+            controllerID + "_QR.png";
 
 
         link.href =
-            canvas.toDataURL(
-                "image/png"
-            );
+            canvas.toDataURL("image/png");
 
 
-        document.body.appendChild(
-            link
-        );
+        document.body.appendChild(link);
 
 
         link.click();
 
 
-        document.body.removeChild(
-            link
-        );
+        document.body.removeChild(link);
 
 
         return;
+
     }
 
 
     const image =
-        qrContainer.querySelector(
-            "img"
-        );
+        qrContainer.querySelector("img");
 
 
     if (image)
     {
 
         const canvas =
-            document.createElement(
-                "canvas"
-            );
+            document.createElement("canvas");
 
 
-        canvas.width =
-            300;
+        canvas.width = 300;
 
-        canvas.height =
-            300;
+        canvas.height = 300;
 
 
         const context =
-            canvas.getContext(
-                "2d"
-            );
+            canvas.getContext("2d");
 
 
         context.drawImage(
@@ -762,42 +585,35 @@ function downloadQR()
 
 
         const link =
-            document.createElement(
-                "a"
-            );
+            document.createElement("a");
 
 
         link.download =
-            controllerID +
-            "_QR.png";
+            controllerID + "_QR.png";
 
 
         link.href =
-            canvas.toDataURL(
-                "image/png"
-            );
+            canvas.toDataURL("image/png");
 
 
-        document.body.appendChild(
-            link
-        );
+        document.body.appendChild(link);
 
 
         link.click();
 
 
-        document.body.removeChild(
-            link
-        );
+        document.body.removeChild(link);
 
 
         return;
+
     }
 
 
     alert(
         "QR code is not ready. Please wait and try again."
     );
+
 }
 
 </script>
@@ -806,3 +622,4 @@ function downloadQR()
 </body>
 
 </html>
+```
